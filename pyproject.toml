@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mojo-rank-bm25"
+version = "0.1.0"
+description = "Mojo-accelerated BM25 ranking with the rank-bm25 Python API"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+dependencies = ["numpy"]
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]
