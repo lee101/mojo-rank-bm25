@@ -69,7 +69,10 @@ def make_corpus(document_count=30_000, document_length=40, vocabulary_size=8_000
         0, vocabulary_size, size=(document_count, document_length), dtype=np.int32
     )
     corpus = [[vocabulary[index] for index in row] for row in values]
-    query = [vocabulary[index] for index in (3, 71, 907, 1337, 4099, 7171, 3, 907)]
+    query = [
+        vocabulary[index % vocabulary_size]
+        for index in (3, 71, 907, 1337, 4099, 7171, 3, 907)
+    ]
     return corpus, query
 
 
@@ -102,6 +105,9 @@ def benchmark_batch(name, corpus, query):
 
 def main():
     corpus, query = make_corpus()
+    small_corpus, small_query = make_corpus(
+        document_count=32, document_length=12, vocabulary_size=64
+    )
     cases = [
         (
             "BM25Okapi.get_scores (30k x 40, 8 terms)",
@@ -118,6 +124,14 @@ def main():
         (
             "BM25Okapi.get_batch_scores (5k docs)",
             lambda: benchmark_batch("BM25Okapi", corpus, query),
+        ),
+        (
+            "BM25Okapi.get_scores (32 x 12, 8 terms)",
+            lambda: benchmark_scores("BM25Okapi", small_corpus, small_query),
+        ),
+        (
+            "BM25Okapi.get_batch_scores (6 docs from 32)",
+            lambda: benchmark_batch("BM25Okapi", small_corpus, small_query),
         ),
     ]
 

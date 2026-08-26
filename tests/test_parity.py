@@ -184,9 +184,26 @@ def _dense_kernel_scores(document_count):
 
 
 @pytest.mark.parametrize("document_count", [7, 16_383, 16_384, 16_389])
-def test_dense_kernel_simd_tail_and_parallel_threshold(document_count):
+def test_dense_kernel_simd_tail(document_count):
     actual, expected = _dense_kernel_scores(document_count)
     assert np.allclose(actual, expected, rtol=1e-14, atol=1e-14)
+
+
+@pytest.mark.parametrize("name", CLASSES)
+@pytest.mark.parametrize("batch_count", [1, 3, 4, 5, 7, 8, 9])
+def test_selected_postings_simd_width_and_tail(upstream, name, batch_count):
+    corpus = [
+        [f"term_{(document + offset) % 11}" for offset in range(6)]
+        for document in range(24)
+    ]
+    query = ["term_1", "term_4", "term_1", "term_9", "missing"]
+    order = [7, 2, 19, 0, 13, 5, 22, 4, 17]
+    doc_ids = order[:batch_count]
+    ours = getattr(mojo_bm25, name)(corpus)
+    theirs = getattr(upstream, name)(corpus)
+    assert ours.get_batch_scores(query, doc_ids) == pytest.approx(
+        theirs.get_batch_scores(query, doc_ids), rel=1e-14, abs=1e-14
+    )
 
 
 def test_ffi_rejects_wrong_dtype_shape_layout_and_read_only_output():

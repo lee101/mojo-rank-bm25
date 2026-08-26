@@ -17,6 +17,7 @@ F = ctypes.c_double
 
 _SIGNATURES = {
     "mrb_score_postings": ([I] * 10 + [F, F], None),
+    "mrb_score_batch_postings": ([I] * 11 + [F, F], None),
     "mrb_score_dense": ([I] * 7 + [F, F, F, F], None),
 }
 
@@ -136,6 +137,34 @@ def score_postings(
     )
 
 
+def _score_postings_unchecked(
+    offsets_address: int,
+    docs_address: int,
+    frequencies_address: int,
+    query_terms: np.ndarray,
+    query_idfs: np.ndarray,
+    norms_address: int,
+    scores: np.ndarray,
+    variant: int,
+    k1: float,
+    delta: float,
+) -> None:
+    _load_library().mrb_score_postings(
+        offsets_address,
+        docs_address,
+        frequencies_address,
+        int(query_terms.ctypes.data),
+        int(query_idfs.ctypes.data),
+        norms_address,
+        int(scores.ctypes.data),
+        scores.size,
+        query_terms.size,
+        variant,
+        k1,
+        delta,
+    )
+
+
 def score_dense(
     frequencies: np.ndarray,
     query_idfs: np.ndarray,
@@ -188,4 +217,105 @@ def score_dense(
         b,
         delta,
         average_length,
+    )
+
+
+def score_batch_postings(
+    offsets: np.ndarray,
+    docs: np.ndarray,
+    frequencies: np.ndarray,
+    query_terms: np.ndarray,
+    query_idfs: np.ndarray,
+    norms: np.ndarray,
+    document_ids: np.ndarray,
+    scores: np.ndarray,
+    variant: int,
+    k1: float,
+    delta: float,
+) -> None:
+    """Score selected documents directly from sorted posting lists."""
+    batch_count = document_ids.size
+    query_count = query_terms.size
+    posting_count = frequencies.size
+    if batch_count == 0 or query_count == 0 or posting_count == 0:
+        raise ValueError("batch posting kernel buffers must be non-empty")
+    pointers = (
+        _buffer(offsets, name="offsets", dtype=np.dtype(np.int64), size=offsets.size),
+        _buffer(docs, name="docs", dtype=np.dtype(np.int64), size=posting_count),
+        _buffer(
+            frequencies,
+            name="frequencies",
+            dtype=np.dtype(np.float64),
+            size=posting_count,
+        ),
+        _buffer(
+            query_terms,
+            name="query_terms",
+            dtype=np.dtype(np.int64),
+            size=query_count,
+        ),
+        _buffer(
+            query_idfs,
+            name="query_idfs",
+            dtype=np.dtype(np.float64),
+            size=query_count,
+        ),
+        _buffer(norms, name="norms", dtype=np.dtype(np.float64), size=norms.size),
+        _buffer(
+            document_ids,
+            name="document_ids",
+            dtype=np.dtype(np.int64),
+            size=batch_count,
+        ),
+        _buffer(
+            scores,
+            name="scores",
+            dtype=np.dtype(np.float64),
+            size=batch_count,
+            writable=True,
+        ),
+    )
+    if offsets.size < 2:
+        raise ValueError("offsets must contain at least two elements")
+    if np.any(query_terms < 0) or np.any(query_terms >= offsets.size - 1):
+        raise ValueError("query_terms contains an out-of-range term id")
+    if np.any(document_ids < 0) or np.any(document_ids >= norms.size):
+        raise ValueError("document_ids contains an out-of-range document id")
+    _load_library().mrb_score_batch_postings(
+        *pointers,
+        batch_count,
+        query_count,
+        variant,
+        k1,
+        delta,
+    )
+
+
+def _score_batch_postings_unchecked(
+    offsets_address: int,
+    docs_address: int,
+    frequencies_address: int,
+    query_terms: np.ndarray,
+    query_idfs: np.ndarray,
+    norms_address: int,
+    document_ids: np.ndarray,
+    scores: np.ndarray,
+    variant: int,
+    k1: float,
+    delta: float,
+) -> None:
+    _load_library().mrb_score_batch_postings(
+        offsets_address,
+        docs_address,
+        frequencies_address,
+        int(query_terms.ctypes.data),
+        int(query_idfs.ctypes.data),
+        norms_address,
+        int(document_ids.ctypes.data),
+        int(scores.ctypes.data),
+        document_ids.size,
+        query_terms.size,
+        variant,
+        k1,
+        delta,
     )

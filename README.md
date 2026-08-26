@@ -78,7 +78,8 @@ and compares both implementations on the same corpora and parameters. It
 covers all three algorithms, IDF state, duplicate and unknown query terms,
 randomized corpora, batch scores, negative document indices accepted upstream,
 top-N results, empty documents, degenerate `NaN` behavior, and public
-signatures.
+signatures. Selected-document kernel tests cover exact SIMD widths and scalar
+tails for all three scoring variants.
 
 ```bash
 pixi run build
@@ -92,25 +93,32 @@ Measured with `pixi run bench` on an Intel Xeon E5-2697 v4 at 2.30 GHz, Linux
 40-token documents, an 8,000-term vocabulary, and an eight-term query. This is
 a sparse retrieval workload: the Mojo path visits postings for matching terms,
 whereas upstream creates and scores a dense 30,000-element array for every
-query term.
+query term. The latency cases use 32 12-token documents, a 64-term vocabulary,
+and the same query length.
 
 | case | Mojo | rank-bm25 | result |
 | --- | ---: | ---: | ---: |
-| `BM25Okapi.get_scores` (30k x 40, 8 terms) | 185.2 us | 99.62 ms | 537.83x faster |
-| `BM25L.get_scores` (30k x 40, 8 terms) | 96.4 us | 96.05 ms | 996.60x faster |
-| `BM25Plus.get_scores` (30k x 40, 8 terms) | 147.0 us | 97.09 ms | 660.28x faster |
-| `BM25Okapi.get_batch_scores` (5k docs) | 1.37 ms | 11.66 ms | 8.49x faster |
+| `BM25Okapi.get_scores` (30k x 40, 8 terms) | 37.0 us | 49.33 ms | 1331.59x faster |
+| `BM25L.get_scores` (30k x 40, 8 terms) | 38.0 us | 46.29 ms | 1216.70x faster |
+| `BM25Plus.get_scores` (30k x 40, 8 terms) | 36.4 us | 45.42 ms | 1249.24x faster |
+| `BM25Okapi.get_batch_scores` (5k docs) | 807.8 us | 11.26 ms | 13.94x faster |
+| `BM25Okapi.get_scores` (32 x 12, 8 terms) | 12.5 us | 125.8 us | 10.08x faster |
+| `BM25Okapi.get_batch_scores` (6 docs from 32) | 18.1 us | 100.2 us | 5.53x faster |
 
 The large full-score gains come from the indexing strategy as well as compiled
 arithmetic; they should not be generalized to every corpus distribution.
-For small batches, scoring keeps the dense path to avoid full-corpus work. Once
-Python dictionary gathering becomes more expensive, it scores the sparse
-postings and selects the requested documents instead. Document lengths are
-cached as a NumPy buffer rather than copied from a Python list on every call.
+For small batches, Mojo binary-searches the sorted postings for each selected
+document instead of constructing and copying a dense frequency matrix in
+Python. It scores full SIMD-width groups of selected documents and uses a scalar
+tail. Larger batches score the sparse corpus once and select the requested
+documents. Immutable NumPy buffer addresses are cached with their owners, so
+trusted internal FFI calls do not repeat array validation or copy index data.
 
-The dense fallback processes full SIMD-width document blocks with a scalar tail
-and splits sufficiently large inputs into independent tasks. CPU is the only
-execution target; this project does not provide a GPU kernel.
+CPU is the only execution target. The selected-document target is too small for
+thread launch overhead, while large batches already use the sparse full-score
+path. No GPU path is provided: posting scoring is dominated by sparse and
+random-access loads, and the dense fallback also remains below the roughly
+2-FLOP-per-byte threshold where device transfer and launch costs could pay off.
 
 ## How it works
 
@@ -126,13 +134,15 @@ document_norms[float64]
 `get_scores` maps query tokens to term IDs and IDF values, then makes one
 ctypes call. Mojo initializes the output and walks only the relevant posting
 ranges, applying the exact Okapi, L, or Plus formula. `get_batch_scores` chooses
-between SIMD dense scoring for small selections and sparse scoring followed by
-indexed selection for larger batches.
+between SIMD selected-posting scoring for small selections and sparse scoring
+followed by indexed selection for larger batches.
 
 All memory is owned by NumPy. Across the C ABI, buffers are passed as integer
 addresses and rebuilt as `UnsafePointer[..., AnyOrigin[mut=True]]` inside the
 non-parametric `@export` functions. The Mojo library never retains a pointer or
-allocates caller-visible memory.
+allocates caller-visible memory. Public low-level wrappers validate arbitrary
+buffers; model-owned immutable buffers use cached addresses and remain strongly
+referenced for the lifetime of the index.
 
 ## License
 

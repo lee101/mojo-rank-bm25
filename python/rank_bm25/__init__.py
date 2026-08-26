@@ -7,7 +7,11 @@ from multiprocessing import Pool, cpu_count
 
 import numpy as np
 
-from ._lib import score_dense, score_postings
+from ._lib import (
+    _score_batch_postings_unchecked,
+    _score_postings_unchecked,
+    score_dense,
+)
 
 __all__ = ["BM25", "BM25Okapi", "BM25L", "BM25Plus"]
 
@@ -112,6 +116,12 @@ class BM25:
             self._norms,
         ):
             buffer.flags.writeable = False
+        self._posting_addresses = (
+            int(self._offsets.ctypes.data),
+            int(self._posting_docs.ctypes.data),
+            int(self._posting_frequencies.ctypes.data),
+            int(self._norms.ctypes.data),
+        )
 
     def _score(self, query, variant):
         query = list(query)
@@ -119,20 +129,20 @@ class BM25:
             return self._score_dense(query, list(range(self.corpus_size)), variant)
 
         known = [term for term in query if term in self._term_ids]
-        scores = np.zeros(self.corpus_size, dtype=np.float64)
         if not known:
-            return scores
+            return np.zeros(self.corpus_size, dtype=np.float64)
         term_ids = np.ascontiguousarray(
             [self._term_ids[term] for term in known], dtype=np.int64
         )
         idfs = np.ascontiguousarray([self.idf[term] for term in known], dtype=np.float64)
-        score_postings(
-            self._offsets,
-            self._posting_docs,
-            self._posting_frequencies,
+        scores = np.empty(self.corpus_size, dtype=np.float64)
+        _score_postings_unchecked(
+            self._posting_addresses[0],
+            self._posting_addresses[1],
+            self._posting_addresses[2],
             term_ids,
             idfs,
-            self._norms,
+            self._posting_addresses[3],
             scores,
             variant,
             self.k1,
@@ -185,7 +195,39 @@ class BM25:
         dense_lookups = count * len(query)
         sparse_threshold = max(512, self.corpus_size // 32)
         if dense_lookups < sparse_threshold:
-            return self._score_dense(query, doc_ids, variant).tolist()
+            known = [term for term in query if term in self._term_ids]
+            if not known:
+                return [0.0] * count
+            has_negative = False
+            for document in doc_ids:
+                if document < -self.corpus_size:
+                    raise IndexError("document index is out of range")
+                has_negative = has_negative or document < 0
+            indices = np.ascontiguousarray(doc_ids, dtype=np.int64)
+            if has_negative:
+                indices = indices.copy()
+                indices[indices < 0] += self.corpus_size
+            term_ids = np.ascontiguousarray(
+                [self._term_ids[term] for term in known], dtype=np.int64
+            )
+            idfs = np.ascontiguousarray(
+                [self.idf[term] for term in known], dtype=np.float64
+            )
+            scores = np.empty(count, dtype=np.float64)
+            _score_batch_postings_unchecked(
+                self._posting_addresses[0],
+                self._posting_addresses[1],
+                self._posting_addresses[2],
+                term_ids,
+                idfs,
+                self._posting_addresses[3],
+                indices,
+                scores,
+                variant,
+                self.k1,
+                self.delta,
+            )
+            return scores.tolist()
         indices = np.asarray(doc_ids)
         return self._score(query, variant)[indices].tolist()
 
